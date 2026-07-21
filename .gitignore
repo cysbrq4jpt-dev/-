@@ -3,3 +3,7 @@ dist/
 .env
 *.log
 .DS_Store
+
+# ボットの作業データ
+workspace/
+data/
