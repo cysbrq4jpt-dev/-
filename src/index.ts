@@ -14,6 +14,8 @@ import { getBinding, setBinding, removeBinding, allBindings } from './bindings.j
 import { setupServer, createProjectChannel, COMMON_CHANNELS } from './server-setup.js';
 import { listMyRepos } from './github.js';
 import { askCodex } from './codex.js';
+import { startCodexBot } from './codex-bot.js';
+import { startTyping, react, sendChunked } from './discord-utils.js';
 
 // ---- 環境変数 ----
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
@@ -22,6 +24,10 @@ const MODEL = process.env.ANTHROPIC_MODEL;
 const CHAT_CHANNEL_NAME = '全体チャット';
 // 「ジャーナル」チャンネルは Claude ではなく Codex(OpenAI) が応答する
 const JOURNAL_CHANNEL_NAME = 'ジャーナル';
+// Codex 専用 bot のトークン。設定されていれば別 bot として #ジャーナル を担当し、
+// この Claude bot は #ジャーナル に反応しない。未設定なら Claude bot が Codex を呼ぶ。
+const CODEX_DISCORD_BOT_TOKEN = process.env.CODEX_DISCORD_BOT_TOKEN;
+const codexBotEnabled = Boolean(CODEX_DISCORD_BOT_TOKEN);
 // true にすると、どのチャンネルでもメンション不要で応答する
 const RESPOND_WITHOUT_MENTION = /^(1|true|yes|on)$/i.test(process.env.RESPOND_WITHOUT_MENTION ?? '');
 // 一括作成で一度に作るチャンネル数の上限（Discord のカテゴリ上限は50）
@@ -98,6 +104,9 @@ async function handleMessage(message: Message): Promise<void> {
   // ---- 反応するかどうかの判定 ----
   //  - DM: 常に反応
   //  - プロジェクトチャンネル(紐付けあり): 常に反応
+  // 専用 Codex bot が担当する #ジャーナル は、この Claude bot は完全に無視する
+  if (isJournalChannel && codexBotEnabled) return;
+
   //  - 全体チャット / ジャーナル: 常に反応
   //  - RESPOND_WITHOUT_MENTION=true: どこでも反応
   //  - それ以外: メンション時のみ
@@ -113,7 +122,8 @@ async function handleMessage(message: Message): Promise<void> {
   const channel = message.channel as TextBasedChannel;
 
   // ---- ジャーナル: Codex(OpenAI) が応答 ----
-  if (isJournalChannel) {
+  // 専用 Codex bot が動いている場合は、そちらが担当するのでこの bot は何もしない。
+  if (isJournalChannel && !codexBotEnabled) {
     const typing = startTyping(channel);
     await react(message, '🤔');
     const result = await askCodex(content);
@@ -409,51 +419,9 @@ function helpText(): string {
   ].join('\n');
 }
 
-async function react(message: Message, emoji: string): Promise<void> {
-  try {
-    await message.react(emoji);
-  } catch {
-    /* ignore */
-  }
-}
-
-function startTyping(channel: TextBasedChannel): { stop: () => void } {
-  const send = () => {
-    if ('sendTyping' in channel) {
-      (channel as { sendTyping: () => Promise<void> }).sendTyping().catch(() => {});
-    }
-  };
-  send();
-  const interval = setInterval(send, 8000);
-  return { stop: () => clearInterval(interval) };
-}
-
-async function sendChunked(message: Message, text: string): Promise<void> {
-  const MAX = 2000;
-  if (text.length <= MAX) {
-    await message.reply(text);
-    return;
-  }
-  const chunks = splitText(text, MAX);
-  await message.reply(chunks[0]);
-  for (let i = 1; i < chunks.length; i++) {
-    if ('send' in message.channel) {
-      await (message.channel as { send: (c: string) => Promise<unknown> }).send(chunks[i]);
-    }
-  }
-}
-
-function splitText(text: string, max: number): string[] {
-  const chunks: string[] = [];
-  let remaining = text;
-  while (remaining.length > max) {
-    let cut = remaining.lastIndexOf('\n', max);
-    if (cut < max * 0.5) cut = max;
-    chunks.push(remaining.slice(0, cut));
-    remaining = remaining.slice(cut);
-  }
-  if (remaining.length > 0) chunks.push(remaining);
-  return chunks;
-}
-
 client.login(DISCORD_BOT_TOKEN);
+
+// Codex 専用 bot（別トークンがあれば）を起動
+if (CODEX_DISCORD_BOT_TOKEN) {
+  startCodexBot(CODEX_DISCORD_BOT_TOKEN);
+}
