@@ -7,3 +7,6 @@ dist/
 # ボットの作業データ
 workspace/
 data/
+
+# Codex 一時ファイル
+.codex-last-*.txt

@@ -1,7 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFile, mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 const exec = promisify(execFile);
@@ -9,8 +8,13 @@ const exec = promisify(execFile);
 const CODEX_BIN = process.env.CODEX_BIN ?? 'codex';
 // read-only / workspace-write / danger-full-access
 const CODEX_SANDBOX = process.env.CODEX_SANDBOX ?? 'read-only';
+// 思考の深さ: minimal / low / medium / high / xhigh。ジャーナル用途は低めが速い。
+// 空にすると Codex の設定(config)に従う。
+const CODEX_REASONING_EFFORT = process.env.CODEX_REASONING_EFFORT ?? 'low';
 // 追加で渡したい引数(スペース区切り)
 const CODEX_EXTRA_ARGS = (process.env.CODEX_EXTRA_ARGS ?? '').split(/\s+/).filter(Boolean);
+
+let counter = 0;
 
 export interface CodexResult {
   text: string;
@@ -29,16 +33,19 @@ export interface CodexOptions {
  * そのまま使う。事前に一度 `codex login` しておくこと。
  */
 export async function askCodex(prompt: string, opts: CodexOptions = {}): Promise<CodexResult> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'codex-'));
-  const outFile = path.join(dir, 'last-message.txt');
+  // 出力ファイルは作業ディレクトリ内に置く。read-only サンドボックスでも cwd 内には
+  // 最終メッセージを書き出せることを確認済み(tmpdir はサンドボックスで弾かれることがある)。
+  const baseDir = opts.cwd ?? process.cwd();
+  const outFile = path.join(baseDir, `.codex-last-${process.pid}-${counter++}.txt`);
 
   const args = ['exec'];
   // Codex は既定で git リポジトリ(信頼されたディレクトリ)外での実行を拒否するため、
   // これを付けてボットの作業ディレクトリでも動くようにする。
   args.push('--skip-git-repo-check');
   if (CODEX_SANDBOX) args.push('--sandbox', CODEX_SANDBOX);
-  // 最終メッセージだけをファイルに書き出す(対応版のみ。非対応なら無視される想定だが
-  // 失敗時は stdout にフォールバックする)
+  // 思考の深さを指定(速度優先)。空なら Codex の既定設定に従う。
+  if (CODEX_REASONING_EFFORT) args.push('-c', `model_reasoning_effort="${CODEX_REASONING_EFFORT}"`);
+  // 最終メッセージだけをファイルに書き出す
   args.push('--output-last-message', outFile);
   args.push(...CODEX_EXTRA_ARGS);
   args.push(prompt);
@@ -73,6 +80,6 @@ export async function askCodex(prompt: string, opts: CodexOptions = {}): Promise
     const detail = (e.stderr || e.stdout || e.message || '不明なエラー').toString().trim();
     return { text: `⚠️ Codex 実行エラー:\n${detail}`.slice(0, 1900), isError: true };
   } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
+    await rm(outFile, { force: true }).catch(() => {});
   }
 }
