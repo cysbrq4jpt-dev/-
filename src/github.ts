@@ -22,10 +22,12 @@ export async function listMyRepos(): Promise<RepoInfo[]> {
   const repos: RepoInfo[] = [];
   const perPage = 100;
 
+  // 所有・共同編集・組織メンバーのリポジトリを全て対象にする。
+  // owner だけに絞りたい場合は GITHUB_REPO_AFFILIATION=owner を設定。
+  const affiliation = process.env.GITHUB_REPO_AFFILIATION ?? 'owner,collaborator,organization_member';
+
   for (let page = 1; page <= 20; page++) {
-    // affiliation=owner: 自分が所有するリポジトリ。共同作業リポも含めたい場合は
-    // owner,collaborator,organization_member に変更。
-    const url = `https://api.github.com/user/repos?per_page=${perPage}&page=${page}&affiliation=owner&sort=pushed`;
+    const url = `https://api.github.com/user/repos?per_page=${perPage}&page=${page}&affiliation=${encodeURIComponent(affiliation)}&sort=pushed`;
     const res = await fetch(url, {
       headers: {
         Authorization: `Bearer ${GITHUB_TOKEN}`,
