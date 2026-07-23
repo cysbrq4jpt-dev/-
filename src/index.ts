@@ -12,12 +12,17 @@ import { ask } from './claude.js';
 import { ensureRepo, parseRepoSpec, hasGithubToken, type RepoRef } from './repos.js';
 import { getBinding, setBinding, removeBinding, allBindings } from './bindings.js';
 import { setupServer, createProjectChannel, COMMON_CHANNELS } from './server-setup.js';
+import { listMyRepos } from './github.js';
 
 // ---- 環境変数 ----
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const MODEL = process.env.ANTHROPIC_MODEL;
 // 「全体チャット」チャンネルではメンション不要で雑談応答する
 const CHAT_CHANNEL_NAME = '全体チャット';
+// true にすると、どのチャンネルでもメンション不要で応答する
+const RESPOND_WITHOUT_MENTION = /^(1|true|yes|on)$/i.test(process.env.RESPOND_WITHOUT_MENTION ?? '');
+// 一括作成で一度に作るチャンネル数の上限（Discord のカテゴリ上限は50）
+const MAX_CHANNELS_PER_CATEGORY = 45;
 
 if (!DISCORD_BOT_TOKEN) {
   console.error('❌ DISCORD_BOT_TOKEN が設定されていません。.env を確認してください。');
@@ -90,8 +95,9 @@ async function handleMessage(message: Message): Promise<void> {
   //  - DM: 常に反応
   //  - プロジェクトチャンネル(紐付けあり): 常に反応
   //  - 全体チャット: 常に反応
+  //  - RESPOND_WITHOUT_MENTION=true: どこでも反応
   //  - それ以外: メンション時のみ
-  const shouldRespond = isDM || Boolean(binding) || isChatChannel || mentioned;
+  const shouldRespond = isDM || Boolean(binding) || isChatChannel || mentioned || RESPOND_WITHOUT_MENTION;
   if (!shouldRespond) return;
 
   if (!content) {
@@ -256,6 +262,10 @@ async function handleProjectCommand(message: Message, rest: string[]): Promise<b
     return true;
   }
 
+  if (sub === 'sync' || sub === 'addall' || sub === 'all') {
+    return handleProjectSync(message, rest.slice(1));
+  }
+
   if (sub === 'list') {
     const list = allBindings();
     if (!list.length) {
@@ -267,7 +277,79 @@ async function handleProjectCommand(message: Message, rest: string[]): Promise<b
     return true;
   }
 
-  await message.reply('サブコマンド: `!project add owner/name` / `!project list`');
+  await message.reply('サブコマンド: `!project add owner/name` / `!project sync` / `!project list`');
+  return true;
+}
+
+/** GitHub のリポジトリを一覧取得し、まだ無いものをまとめてチャンネル化する */
+async function handleProjectSync(message: Message, flags: string[]): Promise<boolean> {
+  if (!message.guild) {
+    await message.reply('サーバー内で実行してください。');
+    return true;
+  }
+  if (!hasManageChannels(message)) {
+    await message.reply('⚠️ 私に「チャンネルの管理」権限がありません。');
+    return true;
+  }
+
+  const includeArchived = flags.includes('--archived');
+  const includeForks = flags.includes('--forks');
+
+  await react(message, '📥');
+  let repos;
+  try {
+    repos = await listMyRepos();
+  } catch (err) {
+    await message.reply(`⚠️ リポジトリ一覧を取得できませんでした: ${(err as Error).message}`);
+    return true;
+  }
+
+  // フィルタ（既定でアーカイブ・forkは除外）
+  const filtered = repos.filter((r) => {
+    if (!includeArchived && r.archived) return false;
+    if (!includeForks && r.fork) return false;
+    return true;
+  });
+
+  // すでにチャンネルに紐付いている repo は除外
+  const bound = new Set(allBindings().map(([, ref]) => `${ref.owner}/${ref.repo}`.toLowerCase()));
+  const todo = filtered.filter((r) => !bound.has(r.fullName.toLowerCase()));
+
+  if (todo.length === 0) {
+    await message.reply(
+      `✅ 追加対象はありません（取得 ${repos.length} 件 / 対象 ${filtered.length} 件はすべて紐付け済み）。`,
+    );
+    return true;
+  }
+
+  const willCreate = todo.slice(0, MAX_CHANNELS_PER_CATEGORY);
+  const remaining = todo.length - willCreate.length;
+
+  await message.reply(
+    [
+      `📂 ${willCreate.length} 件のプロジェクトチャンネルを作成します…`,
+      remaining > 0 ? `（Discord のカテゴリ上限のため、残り ${remaining} 件は次回に持ち越し）` : '',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  );
+
+  let created = 0;
+  const failed: string[] = [];
+  for (const r of willCreate) {
+    try {
+      const { channel } = await createProjectChannel(message.guild, r, r.repo);
+      setBinding(channel.id, r);
+      created++;
+    } catch (err) {
+      failed.push(`${r.fullName}: ${(err as Error).message}`);
+    }
+  }
+
+  const lines = [`✅ ${created} 件のチャンネルを作成しました。`];
+  if (remaining > 0) lines.push(`⏭️ 残り ${remaining} 件は、もう一度 \`!project sync\` で続きを作成できます。`);
+  if (failed.length) lines.push(`⚠️ 失敗 ${failed.length} 件:`, ...failed.slice(0, 5).map((f) => `・${f}`));
+  await message.reply(lines.join('\n'));
   return true;
 }
 
@@ -298,6 +380,7 @@ function helpText(): string {
     '',
     '__プロジェクト（＝リポジトリ）__',
     '・`!project add owner/name [表示名]` … プロジェクト用チャンネルを作成してリポジトリに紐付け',
+    '・`!project sync` … GitHub の全リポジトリを一括でチャンネル化（要 GITHUB_TOKEN）',
     '・`!project list` … 紐付け済みプロジェクト一覧',
     '・`!bind owner/name` … 今いるチャンネルをリポジトリに紐付け',
     '・`!unbind` … 紐付けを解除',
