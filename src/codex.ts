@@ -33,6 +33,9 @@ export async function askCodex(prompt: string, opts: CodexOptions = {}): Promise
   const outFile = path.join(dir, 'last-message.txt');
 
   const args = ['exec'];
+  // Codex は既定で git リポジトリ(信頼されたディレクトリ)外での実行を拒否するため、
+  // これを付けてボットの作業ディレクトリでも動くようにする。
+  args.push('--skip-git-repo-check');
   if (CODEX_SANDBOX) args.push('--sandbox', CODEX_SANDBOX);
   // 最終メッセージだけをファイルに書き出す(対応版のみ。非対応なら無視される想定だが
   // 失敗時は stdout にフォールバックする)
