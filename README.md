@@ -116,6 +116,23 @@ src/foo.ts の型エラーを直して
 | `!reset` | 会話履歴をリセット |
 | `!help` | ヘルプ |
 
+## #ジャーナル で Codex（OpenAI）を使う
+
+`#ジャーナル` チャンネルだけは Claude ではなく **OpenAI の Codex CLI** が応答します。事前準備：
+
+1. Codex CLI をインストール
+   ```bash
+   npm install -g @openai/codex   # または brew install codex
+   ```
+2. ChatGPT サブスクでログイン
+   ```bash
+   codex login          # ブラウザで「Sign in with ChatGPT」
+   # SSH/ヘッドレス環境なら: codex login --device-auth
+   ```
+3. ボットを再起動すれば、`#ジャーナル` での発言に Codex が答えます。
+
+> Codex は既定で `read-only` サンドボックス（ファイルを書き換えない）で動きます。`CODEX_SANDBOX` で変更可能。
+
 ## 環境変数一覧
 
 | 変数 | 必須 | 説明 |

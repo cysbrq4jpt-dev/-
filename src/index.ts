@@ -13,12 +13,15 @@ import { ensureRepo, parseRepoSpec, hasGithubToken, type RepoRef } from './repos
 import { getBinding, setBinding, removeBinding, allBindings } from './bindings.js';
 import { setupServer, createProjectChannel, COMMON_CHANNELS } from './server-setup.js';
 import { listMyRepos } from './github.js';
+import { askCodex } from './codex.js';
 
 // ---- 環境変数 ----
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const MODEL = process.env.ANTHROPIC_MODEL;
 // 「全体チャット」チャンネルではメンション不要で雑談応答する
 const CHAT_CHANNEL_NAME = '全体チャット';
+// 「ジャーナル」チャンネルは Claude ではなく Codex(OpenAI) が応答する
+const JOURNAL_CHANNEL_NAME = 'ジャーナル';
 // true にすると、どのチャンネルでもメンション不要で応答する
 const RESPOND_WITHOUT_MENTION = /^(1|true|yes|on)$/i.test(process.env.RESPOND_WITHOUT_MENTION ?? '');
 // 一括作成で一度に作るチャンネル数の上限（Discord のカテゴリ上限は50）
@@ -78,6 +81,7 @@ async function handleMessage(message: Message): Promise<void> {
   const binding = getBinding(message.channelId);
   const channelName = 'name' in message.channel ? (message.channel as { name: string }).name : '';
   const isChatChannel = channelName === CHAT_CHANNEL_NAME;
+  const isJournalChannel = channelName === JOURNAL_CHANNEL_NAME;
 
   // メンション文字列を除去
   let content = message.content;
@@ -94,10 +98,11 @@ async function handleMessage(message: Message): Promise<void> {
   // ---- 反応するかどうかの判定 ----
   //  - DM: 常に反応
   //  - プロジェクトチャンネル(紐付けあり): 常に反応
-  //  - 全体チャット: 常に反応
+  //  - 全体チャット / ジャーナル: 常に反応
   //  - RESPOND_WITHOUT_MENTION=true: どこでも反応
   //  - それ以外: メンション時のみ
-  const shouldRespond = isDM || Boolean(binding) || isChatChannel || mentioned || RESPOND_WITHOUT_MENTION;
+  const shouldRespond =
+    isDM || Boolean(binding) || isChatChannel || isJournalChannel || mentioned || RESPOND_WITHOUT_MENTION;
   if (!shouldRespond) return;
 
   if (!content) {
@@ -106,6 +111,16 @@ async function handleMessage(message: Message): Promise<void> {
   }
 
   const channel = message.channel as TextBasedChannel;
+
+  // ---- ジャーナル: Codex(OpenAI) が応答 ----
+  if (isJournalChannel) {
+    const typing = startTyping(channel);
+    await react(message, '🤔');
+    const result = await askCodex(content);
+    typing.stop();
+    await sendChunked(message, result.text || '(応答が空でした)');
+    return;
+  }
 
   // ---- プロジェクト（リポジトリ）モード ----
   if (binding) {
@@ -388,7 +403,8 @@ function helpText(): string {
     '',
     '__会話__',
     '・プロジェクトチャンネルでは、話しかけるだけで Claude がそのリポジトリを操作（調査・修正・PR作成）。',
-    '・#全体チャット では普通に雑談できます。',
+    '・#全体チャット では普通に雑談できます（Claude）。',
+    '・#ジャーナル では Codex（OpenAI）が応答します。',
     '・`!reset` … 会話履歴をリセット',
   ].join('\n');
 }
