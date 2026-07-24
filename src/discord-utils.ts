@@ -1,7 +1,13 @@
 import type { Message, TextBasedChannel } from 'discord.js';
 
-/** リアクションを付ける（失敗は無視） */
+/**
+ * リアクションを付ける。
+ * ユーザー要望により絵文字リアクションは無効化(進捗は「入力中…」表示で分かるため)。
+ * REACTIONS=on を設定すると再び付くようにしてある。
+ */
+const REACTIONS_ENABLED = /^(1|true|yes|on)$/i.test(process.env.REACTIONS ?? '');
 export async function react(message: Message, emoji: string): Promise<void> {
+  if (!REACTIONS_ENABLED) return;
   try {
     await message.react(emoji);
   } catch {
