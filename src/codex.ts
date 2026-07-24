@@ -48,7 +48,10 @@ export async function askCodex(prompt: string, opts: CodexOptions = {}): Promise
   // 最終メッセージだけをファイルに書き出す
   args.push('--output-last-message', outFile);
   args.push(...CODEX_EXTRA_ARGS);
-  args.push(prompt);
+  // 素の会話文で返すよう指示を添える(太字やコード装飾を避ける)
+  args.push(
+    `${prompt}\n\n(返信は普通の会話文で。太字・見出し・バッククォート・箇条書きなどの装飾は使わないで)`,
+  );
 
   try {
     const { stdout, stderr } = await exec(CODEX_BIN, args, {
