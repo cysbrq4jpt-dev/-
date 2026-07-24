@@ -1,16 +1,13 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
-
-const exec = promisify(execFile);
 
 const CODEX_BIN = process.env.CODEX_BIN ?? 'codex';
 // read-only / workspace-write / danger-full-access
 const CODEX_SANDBOX = process.env.CODEX_SANDBOX ?? 'read-only';
-// 思考の深さ: minimal / low / medium / high / xhigh。ジャーナル用途は低めが速い。
-// 空にすると Codex の設定(config)に従う。
-const CODEX_REASONING_EFFORT = process.env.CODEX_REASONING_EFFORT ?? 'low';
+// 思考の深さ: minimal / low / medium / high / xhigh。空(既定)なら Codex の設定に従う。
+// ※一部バージョンでこの上書きが原因で応答が空になるため、既定では付けない。
+const CODEX_REASONING_EFFORT = process.env.CODEX_REASONING_EFFORT ?? '';
 // 追加で渡したい引数(スペース区切り)
 const CODEX_EXTRA_ARGS = (process.env.CODEX_EXTRA_ARGS ?? '').split(/\s+/).filter(Boolean);
 
@@ -19,6 +16,40 @@ let counter = 0;
 export interface CodexResult {
   text: string;
   isError: boolean;
+}
+
+interface RunResult {
+  stdout: string;
+  stderr: string;
+  code: number | null;
+}
+
+/**
+ * codex を spawn で起動する。stdin を /dev/null にするのが重要:
+ * codex exec は非TTYの stdin を「追加入力」として読もうとして待ってしまうため、
+ * stdin: 'ignore' で即 EOF にして、引数のプロンプトだけで動かす。
+ */
+function runCodex(args: string[], cwd?: string): Promise<RunResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(CODEX_BIN, args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => child.kill('SIGKILL'), 1000 * 60 * 5);
+    child.stdout.on('data', (d) => (stdout += d.toString()));
+    child.stderr.on('data', (d) => (stderr += d.toString()));
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr, code });
+    });
+  });
 }
 
 export interface CodexOptions {
@@ -54,12 +85,7 @@ export async function askCodex(prompt: string, opts: CodexOptions = {}): Promise
   );
 
   try {
-    const { stdout, stderr } = await exec(CODEX_BIN, args, {
-      cwd: opts.cwd,
-      maxBuffer: 1024 * 1024 * 32,
-      timeout: 1000 * 60 * 5,
-      env: { ...process.env },
-    });
+    const { stdout, stderr } = await runCodex(args, opts.cwd);
 
     // 最終メッセージファイルを最優先で読む
     let text = '';
@@ -70,28 +96,26 @@ export async function askCodex(prompt: string, opts: CodexOptions = {}): Promise
     }
 
     // ファイルが空なら stdout から最終メッセージを抽出する
-    if (!text) text = extractFinalMessage(stdout ?? '');
+    if (!text) text = extractFinalMessage(stdout);
 
     // それでも空なら、診断のため生の出力(末尾)を返す
     if (!text) {
-      const diag = ((stderr || '') + '\n' + (stdout || '')).trim().slice(-1200);
+      const diag = (stderr + '\n' + stdout).trim().slice(-1200);
       text = diag
-        ? `(Codexの最終メッセージを取得できませんでした。生の出力↓)\n\`\`\`\n${diag}\n\`\`\``
+        ? `(Codexの最終メッセージを取得できませんでした。生の出力↓)\n${diag}`
         : '(Codex からの応答が空でした)';
     }
 
     return { text, isError: false };
   } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; message?: string; code?: string };
+    const e = err as { code?: string; message?: string };
     if (e.code === 'ENOENT') {
       return {
-        text:
-          '⚠️ `codex` コマンドが見つかりません。Codex CLI をインストールし、`codex login` でログインしてください。',
+        text: 'codex コマンドが見つかりません。Codex CLI をインストールし、codex login でログインしてください。',
         isError: true,
       };
     }
-    const detail = (e.stderr || e.stdout || e.message || '不明なエラー').toString().trim();
-    return { text: `⚠️ Codex 実行エラー:\n${detail}`.slice(0, 1900), isError: true };
+    return { text: `Codex 実行エラー: ${e.message ?? '不明なエラー'}`, isError: true };
   } finally {
     await rm(outFile, { force: true }).catch(() => {});
   }
