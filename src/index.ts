@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import {
   Client,
+  ChannelType,
   Events,
   GatewayIntentBits,
   Partials,
@@ -209,6 +210,10 @@ async function handleCommand(message: Message, content: string): Promise<boolean
       return handleProjectCommand(message, rest);
     }
 
+    case 'channel': {
+      return handleChannelCommand(message, rest);
+    }
+
     case 'bind': {
       const ref = parseRepoSpec(arg);
       if (!ref) {
@@ -378,6 +383,55 @@ async function handleProjectSync(message: Message, flags: string[]): Promise<boo
   return true;
 }
 
+/** GitHub と無関係の普通のテキストチャンネルを作成する。複数まとめて指定可。 */
+async function handleChannelCommand(message: Message, rest: string[]): Promise<boolean> {
+  if (!message.guild) {
+    await message.reply('サーバー内で実行してください。');
+    return true;
+  }
+  if (!hasManageChannels(message)) {
+    await message.reply('⚠️ 私に「チャンネルの管理」権限がありません。');
+    return true;
+  }
+
+  const sub = rest[0];
+  if (sub !== 'add') {
+    await message.reply('形式: `!channel add チャンネル名`（複数OK: `!channel add タスク管理 メモ 雑談`）');
+    return true;
+  }
+
+  // "add" と、繰り返し入力された "!channel" を除いた残りを名前として扱う
+  const names = rest.slice(1).filter((t) => t !== 'add' && t !== '!channel');
+  if (names.length === 0) {
+    await message.reply('作成するチャンネル名を指定してください。例: `!channel add タスク管理`');
+    return true;
+  }
+
+  // コマンドを打ったチャンネルと同じカテゴリに作る
+  const parentId = 'parentId' in message.channel ? (message.channel.parentId ?? undefined) : undefined;
+
+  const created: string[] = [];
+  const failed: string[] = [];
+  for (const name of names) {
+    try {
+      const ch = await message.guild.channels.create({
+        name,
+        type: ChannelType.GuildText,
+        parent: parentId,
+      });
+      created.push(`<#${ch.id}>`);
+    } catch (err) {
+      failed.push(`${name}: ${(err as Error).message}`);
+    }
+  }
+
+  const lines: string[] = [];
+  if (created.length) lines.push(`✅ 作成しました: ${created.join(' ')}`);
+  if (failed.length) lines.push(`⚠️ 失敗: ${failed.join(' / ')}`);
+  await message.reply(lines.join('\n') || '作成できませんでした。');
+  return true;
+}
+
 async function bindChannel(message: Message, ref: RepoRef): Promise<void> {
   await react(message, '📥');
   try {
@@ -410,6 +464,9 @@ function helpText(): string {
     '・`!bind owner/name` … 今いるチャンネルをリポジトリに紐付け',
     '・`!unbind` … 紐付けを解除',
     '・`!repo` … このチャンネルの対象リポジトリを表示',
+    '',
+    '__普通のチャンネル（GitHub不要）__',
+    '・`!channel add 名前` … 普通のチャンネルを作成（複数OK: `!channel add タスク管理 メモ 雑談`）',
     '',
     '__会話__',
     '・プロジェクトチャンネルでは、話しかけるだけで Claude がそのリポジトリを操作（調査・修正・PR作成）。',

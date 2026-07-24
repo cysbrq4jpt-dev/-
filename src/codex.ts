@@ -44,7 +44,7 @@ export async function askCodex(prompt: string, opts: CodexOptions = {}): Promise
   args.push('--skip-git-repo-check');
   if (CODEX_SANDBOX) args.push('--sandbox', CODEX_SANDBOX);
   // 思考の深さを指定(速度優先)。空なら Codex の既定設定に従う。
-  if (CODEX_REASONING_EFFORT) args.push('-c', `model_reasoning_effort="${CODEX_REASONING_EFFORT}"`);
+  if (CODEX_REASONING_EFFORT) args.push('-c', `model_reasoning_effort=${CODEX_REASONING_EFFORT}`);
   // 最終メッセージだけをファイルに書き出す
   args.push('--output-last-message', outFile);
   args.push(...CODEX_EXTRA_ARGS);
