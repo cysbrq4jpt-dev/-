@@ -51,21 +51,31 @@ export async function askCodex(prompt: string, opts: CodexOptions = {}): Promise
   args.push(prompt);
 
   try {
-    const { stdout } = await exec(CODEX_BIN, args, {
+    const { stdout, stderr } = await exec(CODEX_BIN, args, {
       cwd: opts.cwd,
       maxBuffer: 1024 * 1024 * 32,
       timeout: 1000 * 60 * 5,
       env: { ...process.env },
     });
 
+    // 最終メッセージファイルを最優先で読む
     let text = '';
     try {
       text = (await readFile(outFile, 'utf8')).trim();
     } catch {
-      /* ファイルが無ければ stdout を使う */
+      /* ファイルが無ければ次へ */
     }
-    if (!text) text = (stdout ?? '').trim();
-    if (!text) text = '(Codex からの応答が空でした)';
+
+    // ファイルが空なら stdout から最終メッセージを抽出する
+    if (!text) text = extractFinalMessage(stdout ?? '');
+
+    // それでも空なら、診断のため生の出力(末尾)を返す
+    if (!text) {
+      const diag = ((stderr || '') + '\n' + (stdout || '')).trim().slice(-1200);
+      text = diag
+        ? `(Codexの最終メッセージを取得できませんでした。生の出力↓)\n\`\`\`\n${diag}\n\`\`\``
+        : '(Codex からの応答が空でした)';
+    }
 
     return { text, isError: false };
   } catch (err) {
@@ -82,4 +92,34 @@ export async function askCodex(prompt: string, opts: CodexOptions = {}): Promise
   } finally {
     await rm(outFile, { force: true }).catch(() => {});
   }
+}
+
+/**
+ * `codex exec` の標準出力から最終メッセージを抽出する。
+ * 出力は「...ヘッダー... / codex / <本文> / hook:... / tokens used / ...」の形。
+ * 最後の "codex" 行の次から、次のメタ行(hook:/tokens used/user 等)までを本文とみなす。
+ */
+function extractFinalMessage(stdout: string): string {
+  const lines = stdout.split(/\r?\n/);
+  const metaLine = (l: string) =>
+    /^(hook:|tokens used|user$|codex$|--------|workdir:|model:|provider:|approval:|sandbox:|reasoning |session id:|warning:|\d[\d,]*$)/.test(
+      l.trim(),
+    );
+
+  // 最後の "codex" 行を探す
+  let start = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].trim() === 'codex') {
+      start = i + 1;
+      break;
+    }
+  }
+  if (start === -1) return '';
+
+  const body: string[] = [];
+  for (let i = start; i < lines.length; i++) {
+    if (metaLine(lines[i])) break;
+    body.push(lines[i]);
+  }
+  return body.join('\n').trim();
 }
