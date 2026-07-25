@@ -1,0 +1,28 @@
+[Unit]
+Description=Claude Discord Bot
+Documentation=https://github.com/cysbrq4jpt-dev/-
+After=network-online.target
+Wants=network-online.target
+# 短時間に何度も落ちても再起動を諦めない
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=__BOT_USER__
+WorkingDirectory=__APP_DIR__
+# .env はアプリ側の dotenv が読むので EnvironmentFile は使わない
+Environment=NODE_ENV=production
+# systemd は最小 PATH のため、npm -g で入れた codex を見つけられるよう明示する
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/node dist/index.js
+
+# 落ちても必ず起き上がる
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=claude-discord-bot
+
+[Install]
+WantedBy=multi-user.target
